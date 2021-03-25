@@ -90,6 +90,7 @@ public class Settings {
     public List<String> mapClassesAsClassesPatterns;
     private Predicate<String> mapClassesAsClassesFilter = null;
     public boolean generateConstructors = false;
+    public List<Class<? extends Annotation>> disableTaggedUnionAnnotations = new ArrayList<>();
     public boolean disableTaggedUnions = false;
     public boolean generateReadonlyAndWriteonlyJSDocTags = false;
     public boolean ignoreSwaggerAnnotations = false;
@@ -122,12 +123,16 @@ public class Settings {
     public List<Class<? extends Annotation>> optionalAnnotations = new ArrayList<>();
     public List<Class<? extends Annotation>> requiredAnnotations = new ArrayList<>();
     public List<Class<? extends Annotation>> nullableAnnotations = new ArrayList<>();
+    public boolean primitivePropertiesRequired = false;
     public boolean generateInfoJson = false;
     public boolean generateNpmPackageJson = false;
     public String npmName = null;
     public String npmVersion = null;
     public Map<String, String> npmPackageDependencies = new LinkedHashMap<>();
+    public Map<String, String> npmDevDependencies = new LinkedHashMap<>();
+    public Map<String, String> npmPeerDependencies = new LinkedHashMap<>();
     public String typescriptVersion = "^2.4";
+    public String npmTypescriptVersion = null;
     public String npmBuildScript = null;
     @Deprecated public boolean displaySerializerWarning;
     @Deprecated public boolean debug;
@@ -265,24 +270,28 @@ public class Settings {
         this.nullableAnnotations = loadClasses(classLoader, nullableAnnotations, Annotation.class);
     }
 
+    public void loadDisableTaggedUnionAnnotations(ClassLoader classLoader, List<String> disableTaggedUnionAnnotations) {
+        this.disableTaggedUnionAnnotations = loadClasses(classLoader, disableTaggedUnionAnnotations, Annotation.class);
+    }
+
     public void loadJackson2Modules(ClassLoader classLoader, List<String> jackson2Modules) {
         this.jackson2Modules = loadClasses(classLoader, jackson2Modules, Module.class);
     }
 
-    public static Map<String, String> convertToMap(List<String> mappings) {
+    public static Map<String, String> convertToMap(List<String> items, String itemName) {
         final Map<String, String> result = new LinkedHashMap<>();
-        if (mappings != null) {
-            for (String mapping : mappings) {
-                final String[] values = mapping.split(":", 2);
+        if (items != null) {
+            for (String item : items) {
+                final String[] values = item.split(":", 2);
                 if (values.length < 2) {
-                    throw new RuntimeException("Invalid mapping format: " + mapping);
+                    throw new RuntimeException(String.format("Invalid '%s' format: %s", itemName, item));
                 }
                 result.put(values[0].trim(), values[1].trim());
             }
         }
         return result;
     }
-
+    
     public void validate() {
         if (classLoader == null) {
             classLoader = Thread.currentThread().getContextClassLoader();
@@ -313,6 +322,9 @@ public class Settings {
         }
         if (jackson2Configuration != null && jsonLibrary != JsonLibrary.jackson2) {
             throw new RuntimeException("'jackson2Configuration' parameter is only applicable to 'jackson2' library.");
+        }
+        if (!generateNpmPackageJson && (!npmPackageDependencies.isEmpty() || !npmDevDependencies.isEmpty() || !npmPeerDependencies.isEmpty())) {
+            throw new RuntimeException("'npmDependencies', 'npmDevDependencies' and 'npmPeerDependencies' parameters are only applicable when generating NPM 'package.json'.");
         }
         getValidatedCustomTypeMappings();
         getValidatedCustomTypeAliases();
@@ -347,6 +359,12 @@ public class Settings {
             if (features.npmPackageDependencies != null) {
                 npmPackageDependencies.putAll(features.npmPackageDependencies);
             }
+            if (features.npmDevDependencies != null) {
+                npmDevDependencies.putAll(features.npmDevDependencies);
+            }
+            if (features.npmPeerDependencies != null) {
+                npmPeerDependencies.putAll(features.npmPeerDependencies);
+            }
             if (features.overridesStringEnums) {
                 defaultStringEnumsOverriddenByExtension = true;
             }
@@ -377,6 +395,9 @@ public class Settings {
         }
         if (!optionalAnnotations.isEmpty() && !requiredAnnotations.isEmpty()) {
             throw new RuntimeException("Only one of 'optionalAnnotations' and 'requiredAnnotations' can be used at the same time.");
+        }
+        if (primitivePropertiesRequired && requiredAnnotations.isEmpty()) {
+            throw new RuntimeException("'primitivePropertiesRequired' parameter can only be used with 'requiredAnnotations' parameter.");
         }
         for (Class<? extends Annotation> annotation : nullableAnnotations) {
             final Target target = annotation.getAnnotation(Target.class);
@@ -420,8 +441,8 @@ public class Settings {
         if (restOptionsType != null && !isGenerateRest()) {
             throw new RuntimeException("'restOptionsType' parameter can only be used when generating REST client or interface.");
         }
-        if (generateInfoJson && outputKind != TypeScriptOutputKind.module) {
-            throw new RuntimeException("'generateInfoJson' can only be used when generating proper module ('outputKind' parameter is 'module').");
+        if (generateInfoJson && (outputKind != TypeScriptOutputKind.module && outputKind != TypeScriptOutputKind.global)) {
+            throw new RuntimeException("'generateInfoJson' can only be used when 'outputKind' parameter is 'module' or 'global'.");
         }
         if (generateNpmPackageJson && outputKind != TypeScriptOutputKind.module) {
             throw new RuntimeException("'generateNpmPackageJson' can only be used when generating proper module ('outputKind' parameter is 'module').");
@@ -435,9 +456,15 @@ public class Settings {
             if (npmName != null || npmVersion != null) {
                 throw new RuntimeException("'npmName' and 'npmVersion' is only applicable when generating NPM 'package.json'.");
             }
+            if (npmTypescriptVersion != null) {
+                throw new RuntimeException("'npmTypescriptVersion' is only applicable when generating NPM 'package.json'.");
+            }
             if (npmBuildScript != null) {
                 throw new RuntimeException("'npmBuildScript' is only applicable when generating NPM 'package.json'.");
             }
+        }
+        if (npmTypescriptVersion != null && outputFileType != TypeScriptFileType.implementationFile) {
+            throw new RuntimeException("'npmTypescriptVersion' can only be used when generating implementation file ('outputFileType' parameter is 'implementationFile').");
         }
         if (npmBuildScript != null && outputFileType != TypeScriptFileType.implementationFile) {
             throw new RuntimeException("'npmBuildScript' can only be used when generating implementation file ('outputFileType' parameter is 'implementationFile').");
@@ -797,7 +824,16 @@ public class Settings {
         Objects.requireNonNull(requiredClassType, "requiredClassType");
         try {
             TypeScriptGenerator.getLogger().verbose("Loading class " + className);
-            final Class<?> loadedClass = classLoader.loadClass(className);
+            final Pair<String, Integer> pair = parseArrayClassDimensions(className);
+            final int arrayDimensions = pair.getValue2();
+            final Class<?> loadedClass;
+            if (arrayDimensions > 0) {
+                final String componentTypeName = pair.getValue1();
+                final Class<?> componentType = loadPrimitiveOrRegularClass(classLoader, componentTypeName);
+                loadedClass = Utils.getArrayClass(componentType, arrayDimensions);
+            } else {
+                loadedClass = loadPrimitiveOrRegularClass(classLoader, className);
+            }
             if (requiredClassType.isAssignableFrom(loadedClass)) {
                 @SuppressWarnings("unchecked")
                 final Class<? extends T> castedClass = (Class<? extends T>) loadedClass;
@@ -808,6 +844,22 @@ public class Settings {
         } catch (ReflectiveOperationException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private static Pair<String, Integer> parseArrayClassDimensions(String className) {
+        int dimensions = 0;
+        while (className.endsWith("[]")) {
+            dimensions++;
+            className = className.substring(0, className.length() - 2);
+        }
+        return Pair.of(className, dimensions);
+    }
+
+    private static Class<?> loadPrimitiveOrRegularClass(ClassLoader classLoader, String className) throws ClassNotFoundException {
+        final Class<?> primitiveType = Utils.getPrimitiveType(className);
+        return primitiveType != null
+                ? primitiveType
+                : classLoader.loadClass(className);
     }
 
     private static <T> List<T> loadInstances(ClassLoader classLoader, List<String> classNames, Class<T> requiredType) {

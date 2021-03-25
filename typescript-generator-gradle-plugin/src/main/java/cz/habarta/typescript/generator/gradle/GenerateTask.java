@@ -53,6 +53,7 @@ public class GenerateTask extends DefaultTask {
     public List<String> classesExtendingClasses;
     public String classesFromJaxrsApplication;
     public boolean classesFromAutomaticJaxrsApplication;
+    public List<String> scanningAcceptedPackages;
     public List<String> excludeClasses;
     public List<String> excludeClassPatterns;
     public List<String> includePropertyAnnotations;
@@ -85,6 +86,7 @@ public class GenerateTask extends DefaultTask {
     public ClassMapping mapClasses;
     public List<String> mapClassesAsClassesPatterns;
     public boolean generateConstructors;
+    public List<String> disableTaggedUnionAnnotations;
     public boolean disableTaggedUnions;
     public boolean generateReadonlyAndWriteonlyJSDocTags;
     public boolean ignoreSwaggerAnnotations;
@@ -113,11 +115,16 @@ public class GenerateTask extends DefaultTask {
     public List<String> optionalAnnotations;
     public List<String> requiredAnnotations;
     public List<String> nullableAnnotations;
+    public boolean primitivePropertiesRequired;
     public boolean generateInfoJson;
     public boolean generateNpmPackageJson;
     public String npmName;
     public String npmVersion;
+    public String npmTypescriptVersion;
     public String npmBuildScript;
+    public List<String> npmDependencies;
+    public List<String> npmDevDependencies;
+    public List<String> npmPeerDependencies;
     public StringQuotes stringQuotes;
     public String indentString;
     @Deprecated public boolean displaySerializerWarning;
@@ -154,12 +161,12 @@ public class GenerateTask extends DefaultTask {
         settings.removeTypeNameSuffix = removeTypeNameSuffix;
         settings.addTypeNamePrefix = addTypeNamePrefix;
         settings.addTypeNameSuffix = addTypeNameSuffix;
-        settings.customTypeNaming = Settings.convertToMap(customTypeNaming);
+        settings.customTypeNaming = Settings.convertToMap(customTypeNaming, "customTypeNaming");
         settings.customTypeNamingFunction = customTypeNamingFunction;
         settings.referencedFiles = referencedFiles;
         settings.importDeclarations = importDeclarations;
-        settings.customTypeMappings = Settings.convertToMap(customTypeMappings);
-        settings.customTypeAliases = Settings.convertToMap(customTypeAliases);
+        settings.customTypeMappings = Settings.convertToMap(customTypeMappings, "customTypeMapping");
+        settings.customTypeAliases = Settings.convertToMap(customTypeAliases, "customTypeAlias");
         settings.mapDate = mapDate;
         settings.mapEnum = mapEnum;
         settings.enumMemberCasing = enumMemberCasing;
@@ -168,6 +175,7 @@ public class GenerateTask extends DefaultTask {
         settings.mapClasses = mapClasses;
         settings.mapClassesAsClassesPatterns = mapClassesAsClassesPatterns;
         settings.generateConstructors = generateConstructors;
+        settings.loadDisableTaggedUnionAnnotations(classLoader, disableTaggedUnionAnnotations);
         settings.disableTaggedUnions = disableTaggedUnions;
         settings.generateReadonlyAndWriteonlyJSDocTags = generateReadonlyAndWriteonlyJSDocTags;
         settings.ignoreSwaggerAnnotations = ignoreSwaggerAnnotations;
@@ -196,11 +204,16 @@ public class GenerateTask extends DefaultTask {
         settings.loadOptionalAnnotations(classLoader, optionalAnnotations);
         settings.loadRequiredAnnotations(classLoader, requiredAnnotations);
         settings.loadNullableAnnotations(classLoader, nullableAnnotations);
+        settings.primitivePropertiesRequired = primitivePropertiesRequired;
         settings.generateInfoJson = generateInfoJson;
         settings.generateNpmPackageJson = generateNpmPackageJson;
         settings.npmName = npmName == null && generateNpmPackageJson ? getProject().getName() : npmName;
         settings.npmVersion = npmVersion == null && generateNpmPackageJson ? settings.getDefaultNpmVersion() : npmVersion;
+        settings.npmTypescriptVersion = npmTypescriptVersion;
         settings.npmBuildScript = npmBuildScript;
+        settings.npmPackageDependencies = Settings.convertToMap(npmDependencies, "npmDependencies");
+        settings.npmDevDependencies = Settings.convertToMap(npmDevDependencies, "npmDevDependencies");
+        settings.npmPeerDependencies = Settings.convertToMap(npmPeerDependencies, "npmPeerDependencies");
         settings.setStringQuotes(stringQuotes);
         settings.setIndentString(indentString);
         settings.displaySerializerWarning = displaySerializerWarning;
@@ -233,7 +246,6 @@ public class GenerateTask extends DefaultTask {
                 }
             }
         }
-        urls.addAll(getFilesFromConfiguration("compile"));
         urls.addAll(getFilesFromConfiguration("compileClasspath"));
 
         try (URLClassLoader classLoader = Settings.createClassLoader(getProject().getName(), urls.toArray(new URL[0]), Thread.currentThread().getContextClassLoader())) {
@@ -250,6 +262,7 @@ public class GenerateTask extends DefaultTask {
             parameters.automaticJaxrsApplication = classesFromAutomaticJaxrsApplication;
             parameters.isClassNameExcluded = settings.getExcludeFilter();
             parameters.classLoader = classLoader;
+            parameters.scanningAcceptedPackages = scanningAcceptedPackages;
             parameters.debug = loggingLevel == Logger.Level.Debug;
 
             final File output = outputFile != null

@@ -6,6 +6,9 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.util.Arrays;
 import java.util.List;
 import org.junit.Assert;
 import org.junit.Test;
@@ -530,10 +533,47 @@ public class TaggedUnionsTest {
         Assert.assertEquals(expected, output);
     }
 
+    @Test
+    public void testTaggedUnionDisabledUsingAnnotation() {
+        final Settings settings = TestUtils.settings();
+        settings.disableTaggedUnionAnnotations = Arrays.asList(TestMarker.class);
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(Geometry2.class));
+        final String expected = (
+                "\n" +
+                "interface Geometry2 {\n" +
+                "    shapes: Shape2[];\n" +
+                "}\n" +
+                "\n" +
+                "interface Shape2 {\n" +
+                "    kind: string;\n" +
+                "}\n" +
+                "\n" +
+                "interface Square2 extends Shape2 {\n" +
+                "    size: number;\n" +
+                "}\n" +
+                "\n" +
+                "interface Rectangle2 extends Shape2 {\n" +
+                "    width: number;\n" +
+                "    height: number;\n" +
+                "}\n" +
+                "\n" +
+                "interface Circle2 extends Shape2 {\n" +
+                "    radius: number;\n" +
+                "}\n" +
+                ""
+                ).replace('\'', '"');
+        Assert.assertEquals(expected, output);
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @interface TestMarker {
+    }
+
     private static class Geometry2 {
         public List<Shape2> shapes;
     }
 
+    @TestMarker
     @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.EXISTING_PROPERTY, property = "kind")
     @JsonSubTypes({
         @JsonSubTypes.Type(Square2.class),
@@ -567,6 +607,86 @@ public class TaggedUnionsTest {
     @JsonTypeName("circle")
     private static class Circle2 extends Shape2 {
         public double radius;
+    }
+
+
+    static class RecordUsage {
+        public List<Record> records;
+        public List<FormRecord> formRecords;
+        public List<ListRecord> listRecords;
+    }
+
+    @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, include = JsonTypeInfo.As.PROPERTY)
+    @JsonSubTypes({
+        @JsonSubTypes.Type(value = FormRecord.class),
+        @JsonSubTypes.Type(value = ListRecord.class),
+    })
+    static abstract class Record {}
+
+    @JsonSubTypes({
+        @JsonSubTypes.Type(value = OrderFormRecord.class, name = "order.form"),
+        @JsonSubTypes.Type(value = ProductFormRecord.class, name = "product.form"),
+    })
+    static abstract class FormRecord extends Record {}
+
+    @JsonSubTypes({
+        @JsonSubTypes.Type(value = OrderListRecord.class, name = "order.list"),
+        @JsonSubTypes.Type(value = ProductListRecord.class, name = "product.list"),
+    })
+    static abstract class ListRecord extends Record {}
+
+    static class OrderFormRecord extends FormRecord {}
+    static class OrderListRecord extends ListRecord {}
+    static class ProductFormRecord extends FormRecord {}
+    static class ProductListRecord extends ListRecord {}
+
+    @Test
+    public void testIntermediateUnions() {
+        final Settings settings = TestUtils.settings();
+        settings.quotes = "'";
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(RecordUsage.class));
+        final String expected = ""
+                + "interface RecordUsage {\n"
+                + "    records: RecordUnion[];\n"
+                + "    formRecords: FormRecordUnion[];\n"
+                + "    listRecords: ListRecordUnion[];\n"
+                + "}\n"
+                + "\n"
+                + "interface Record {\n"
+                + "    '@type': 'order.form' | 'product.form' | 'order.list' | 'product.list';\n"
+                + "}\n"
+                + "\n"
+                + "interface FormRecord extends Record {\n"
+                + "    '@type': 'order.form' | 'product.form';\n"
+                + "}\n"
+                + "\n"
+                + "interface ListRecord extends Record {\n"
+                + "    '@type': 'order.list' | 'product.list';\n"
+                + "}\n"
+                + "\n"
+                + "interface OrderFormRecord extends FormRecord {\n"
+                + "    '@type': 'order.form';\n"
+                + "}\n"
+                + "\n"
+                + "interface ProductFormRecord extends FormRecord {\n"
+                + "    '@type': 'product.form';\n"
+                + "}\n"
+                + "\n"
+                + "interface OrderListRecord extends ListRecord {\n"
+                + "    '@type': 'order.list';\n"
+                + "}\n"
+                + "\n"
+                + "interface ProductListRecord extends ListRecord {\n"
+                + "    '@type': 'product.list';\n"
+                + "}\n"
+                + "\n"
+                + "type RecordUnion = FormRecord | ListRecord;\n"
+                + "\n"
+                + "type FormRecordUnion = OrderFormRecord | ProductFormRecord;\n"
+                + "\n"
+                + "type ListRecordUnion = OrderListRecord | ProductListRecord;\n"
+                + "";
+        Assert.assertEquals(expected.trim(), output.trim());
     }
 
 }

@@ -170,6 +170,21 @@ public class GenerateMojo extends AbstractMojo {
     private boolean classesFromAutomaticJaxrsApplication;
 
     /**
+     * Allows to speed up classpath scanning by limiting scanning to specified packages.
+     * This optimization applies to following parameters:
+     * <ul>
+     * <li><code>classPatterns</code></li>
+     * <li><code>classesImplementingInterfaces</code></li>
+     * <li><code>classesExtendingClasses</code></li>
+     * <li><code>classesWithAnnotations</code></li>
+     * <li><code>classesFromAutomaticJaxrsApplication</code></li>
+     * </ul>
+     * This parameter is passed directly to underlying classpath scanning library (ClassGraph) without any validation or interpretation.
+     */
+    @Parameter
+    private List<String> scanningAcceptedPackages;
+
+    /**
      * List of classes excluded from processing.
      */
     @Parameter
@@ -415,7 +430,8 @@ public class GenerateMojo extends AbstractMojo {
      * <li><code>asEnum</code> - creates string enum. Requires TypeScript 2.4</li>
      * <li><code>asNumberBasedEnum</code> - creates enum of named number values</li>
      * </ul>
-     * Default value is <code>asUnion</code>.
+     * Default value is <code>asUnion</code>.<br>
+     * See also <code>nonConstEnums</code> parameter.
      */
     @Parameter
     private EnumMapping mapEnum;
@@ -483,7 +499,18 @@ public class GenerateMojo extends AbstractMojo {
     private boolean generateConstructors;
 
     /**
+     * Specifies annotations used for disabling tagged union created from classes.
+     * In case of Jackson2 library this means class hierarchy formed using <code>@JsonTypeInfo</code> and <code>@JsonSubTypes</code> annotations.
+     * While <code>disableTaggedUnions</code> parameter only disables creation of TypeScript discriminated union types
+     * this parameter allows to disable also processing of discriminant property.
+     */
+    @Parameter
+    private List<String> disableTaggedUnionAnnotations;
+
+    /**
      * If <code>true</code> tagged unions will not be generated for Jackson 2 polymorphic types.
+     * This parameter does not disable processing of discriminant property.
+     * See also <code>disableTaggedUnionAnnotations</code> parameter.
      */
     @Parameter
     private boolean disableTaggedUnions;
@@ -706,9 +733,16 @@ public class GenerateMojo extends AbstractMojo {
     private List<String> nullableAnnotations;
 
     /**
+     * When using {@link #requiredAnnotations} to mark properties as not optional then
+     * setting this parameter to <code>true</code> marks also all properties of primitive type without explicit annotation.
+     */
+    @Parameter
+    private boolean primitivePropertiesRequired;
+
+    /**
      * If <code>true</code> JSON file describing generated module will be generated.
      * In following typescript-generator run this allows to generate another module which could depend on currently generated module.
-     * Generated JSON file contains mapping from Java classes to TypeScript types which typescript-generator needs 
+     * Generated JSON file contains mapping from Java classes to TypeScript types which typescript-generator needs
      * when the module is referenced from another module using {@link #moduleDependencies} parameter.
      * Only applicable when {@link #outputKind} is set to <code>module</code>.
      */
@@ -740,12 +774,46 @@ public class GenerateMojo extends AbstractMojo {
     private String npmVersion;
 
     /**
+     * Specifies TypeScript version declared in NPM <code>package.json</code>.<br>
+     * Default value is <code>^2.4</code>.
+     */
+    @Parameter
+    private String npmTypescriptVersion;
+
+    /**
      * Specifies NPM "build" script.<br>
      * Only applicable when {@link #generateNpmPackageJson} parameter is <code>true</code> and generating implementation file (.ts).<br>
      * Default value is <code>tsc --module umd --moduleResolution node --typeRoots --target es5 --lib es6 --declaration --sourceMap $outputFile</code>.
      */
     @Parameter
     private String npmBuildScript;
+    
+    /**
+     * List of additional NPM <code>dependencies</code>.<br>
+     * Only applicable when {@link #generateNpmPackageJson} parameter is <code>true</code> and generating implementation file (.ts).<br>
+     * Each item it this list specifies dependency with its version.<br>
+     * Item format is: <code>name:version</code>.
+     */
+    @Parameter
+    private List<String> npmDependencies;
+    
+    /**
+     * List of additional NPM <code>devDependencies</code>.<br>
+     * Only applicable when {@link #generateNpmPackageJson} parameter is <code>true</code> and generating implementation file (.ts).<br>
+     * Each item it this list specifies dependency with its version.<br>
+     * Item format is: <code>name:version</code>.
+     */
+    @Parameter
+    private List<String> npmDevDependencies;
+    
+    /**
+     * List of additional NPM <code>peerDependencies</code>.<br>
+     * Only applicable when {@link #generateNpmPackageJson} parameter is <code>true</code> and generating implementation file (.ts).<br>
+     * Each item it this list specifies dependency with its version.<br>
+     * Item format is: <code>name:version</code>.
+     */
+    @Parameter
+    private List<String> npmPeerDependencies;
 
     /**
      * Specifies how strings will be quoted.
@@ -851,12 +919,12 @@ public class GenerateMojo extends AbstractMojo {
         settings.removeTypeNameSuffix = removeTypeNameSuffix;
         settings.addTypeNamePrefix = addTypeNamePrefix;
         settings.addTypeNameSuffix = addTypeNameSuffix;
-        settings.customTypeNaming = Settings.convertToMap(customTypeNaming);
+        settings.customTypeNaming = Settings.convertToMap(customTypeNaming, "customTypeNaming");
         settings.customTypeNamingFunction = customTypeNamingFunction;
         settings.referencedFiles = referencedFiles;
         settings.importDeclarations = importDeclarations;
-        settings.customTypeMappings = Settings.convertToMap(customTypeMappings);
-        settings.customTypeAliases = Settings.convertToMap(customTypeAliases);
+        settings.customTypeMappings = Settings.convertToMap(customTypeMappings, "customTypeMapping");
+        settings.customTypeAliases = Settings.convertToMap(customTypeAliases, "customTypeAlias");
         settings.mapDate = mapDate;
         settings.mapEnum = mapEnum;
         settings.enumMemberCasing = enumMemberCasing;
@@ -865,6 +933,7 @@ public class GenerateMojo extends AbstractMojo {
         settings.mapClasses = mapClasses;
         settings.mapClassesAsClassesPatterns = mapClassesAsClassesPatterns;
         settings.generateConstructors = generateConstructors;
+        settings.loadDisableTaggedUnionAnnotations(classLoader, disableTaggedUnionAnnotations);
         settings.disableTaggedUnions = disableTaggedUnions;
         settings.generateReadonlyAndWriteonlyJSDocTags = generateReadonlyAndWriteonlyJSDocTags;
         settings.ignoreSwaggerAnnotations = ignoreSwaggerAnnotations;
@@ -893,11 +962,16 @@ public class GenerateMojo extends AbstractMojo {
         settings.loadOptionalAnnotations(classLoader, optionalAnnotations);
         settings.loadRequiredAnnotations(classLoader, requiredAnnotations);
         settings.loadNullableAnnotations(classLoader, nullableAnnotations);
+        settings.primitivePropertiesRequired = primitivePropertiesRequired;
         settings.generateInfoJson = generateInfoJson;
         settings.generateNpmPackageJson = generateNpmPackageJson;
         settings.npmName = npmName == null && generateNpmPackageJson ? project.getArtifactId() : npmName;
         settings.npmVersion = npmVersion == null && generateNpmPackageJson ? settings.getDefaultNpmVersion() : npmVersion;
+        settings.npmTypescriptVersion = npmTypescriptVersion;
         settings.npmBuildScript = npmBuildScript;
+        settings.npmPackageDependencies = Settings.convertToMap(npmDependencies, "npmDependencies");
+        settings.npmDevDependencies = Settings.convertToMap(npmDevDependencies, "npmDevDependencies");
+        settings.npmPeerDependencies = Settings.convertToMap(npmPeerDependencies, "npmPeerDependencies");
         settings.setStringQuotes(stringQuotes);
         settings.setIndentString(indentString);
         settings.displaySerializerWarning = displaySerializerWarning;
@@ -942,6 +1016,7 @@ public class GenerateMojo extends AbstractMojo {
             parameters.automaticJaxrsApplication = classesFromAutomaticJaxrsApplication;
             parameters.isClassNameExcluded = settings.getExcludeFilter();
             parameters.classLoader = classLoader;
+            parameters.scanningAcceptedPackages = scanningAcceptedPackages;
             parameters.debug = loggingLevel == Logger.Level.Debug;
 
             final File output = outputFile != null

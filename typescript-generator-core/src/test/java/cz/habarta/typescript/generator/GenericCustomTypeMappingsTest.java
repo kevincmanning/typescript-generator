@@ -5,9 +5,10 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.MatcherAssert.assertThat;
 import org.junit.Assert;
 import org.junit.Test;
-
 
 @SuppressWarnings("unused")
 public class GenericCustomTypeMappingsTest {
@@ -133,6 +134,26 @@ public class GenericCustomTypeMappingsTest {
         settings.customTypeMappings = Collections.singletonMap("cz.habarta.typescript.generator.GenericCustomTypeMappingsTest$Generic2[T1, T2]", "string[]");
         final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(Usage.class));
         Assert.assertTrue(output.contains("generic: string[]"));
+    }
+
+    private static class BinaryData {
+        public byte[] data;
+        public byte[][] dataArray;
+        public List<byte[]> dataList;
+        public long[] specialData;
+    }
+
+    @Test
+    public void byteArrayAsString() {
+        final Settings settings = TestUtils.settings();
+        settings.customTypeMappings.put("byte[]", "string");
+        settings.customTypeMappings.put("byte[][]", "DifferentString[]");
+        settings.customTypeMappings.put("long[]", "SpecialString");
+        final String output = new TypeScriptGenerator(settings).generateTypeScript(Input.from(BinaryData.class));
+        assertThat(output, containsString("data: string"));
+        assertThat(output, containsString("dataArray: DifferentString[]"));
+        assertThat(output, containsString("dataList: string[]"));
+        assertThat(output, containsString("specialData: SpecialString"));
     }
 
 }

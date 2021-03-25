@@ -13,6 +13,7 @@ import cz.habarta.typescript.generator.util.GenericsResolver;
 import cz.habarta.typescript.generator.util.PropertyMember;
 import cz.habarta.typescript.generator.util.Utils;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
@@ -22,15 +23,18 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 
 public abstract class ModelParser {
 
     protected final Settings settings;
     private final Javadoc javadoc;
+    private final DeprecationEnricher deprecationEnricher;
     private final Queue<SourceType<? extends Type>> typeQueue;
     private final TypeProcessor commonTypeProcessor;
     private final List<RestApplicationParser> restApplicationParsers;
@@ -48,6 +52,7 @@ public abstract class ModelParser {
     public ModelParser(Settings settings, TypeProcessor commonTypeProcessor, List<RestApplicationParser> restApplicationParsers) {
         this.settings = settings;
         this.javadoc = new Javadoc(settings);
+        this.deprecationEnricher = new DeprecationEnricher();
         this.typeQueue = new LinkedList<>();
         this.restApplicationParsers = restApplicationParsers;
         this.commonTypeProcessor = commonTypeProcessor;
@@ -64,6 +69,7 @@ public abstract class ModelParser {
             model = Swagger.enrichModel(model);
         }
         model = javadoc.enrichModel(model);
+        model = deprecationEnricher.enrichModel(model);
         return model;
     }
 
@@ -122,7 +128,7 @@ public abstract class ModelParser {
 
     protected abstract DeclarationModel parseClass(SourceType<Class<?>> sourceClass);
 
-    protected static PropertyMember wrapMember(TypeParser typeParser, Member propertyMember, AnnotationGetter annotationGetter,
+    protected static PropertyMember wrapMember(TypeParser typeParser, Member propertyMember, Integer creatorIndex, AnnotationGetter annotationGetter,
             String propertyName, Class<?> sourceClass) {
         if (propertyMember instanceof Field) {
             final Field field = (Field) propertyMember;
@@ -130,18 +136,29 @@ public abstract class ModelParser {
         }
         if (propertyMember instanceof Method) {
             final Method method = (Method) propertyMember;
-            switch (method.getParameterCount()) {
-                case 0:
-                    return new PropertyMember(method, typeParser.getMethodReturnType(method), method.getAnnotatedReturnType(), annotationGetter);
-                case 1:
-                    return new PropertyMember(method, typeParser.getMethodParameterTypes(method).get(0), method.getAnnotatedParameterTypes()[0], annotationGetter);
+            if (creatorIndex != null) {
+                return new PropertyMember(method, typeParser.getMethodParameterTypes(method).get(creatorIndex), method.getAnnotatedParameterTypes()[creatorIndex], annotationGetter);
+            } else {
+                switch (method.getParameterCount()) {
+                    case 0:
+                        return new PropertyMember(method, typeParser.getMethodReturnType(method), method.getAnnotatedReturnType(), annotationGetter);
+                    case 1:
+                        return new PropertyMember(method, typeParser.getMethodParameterTypes(method).get(0), method.getAnnotatedParameterTypes()[0], annotationGetter);
+                }
             }
         }
-        throw new RuntimeException(String.format(
+        if (propertyMember instanceof Constructor) {
+            final Constructor<?> constructor = (Constructor<?>) propertyMember;
+            if (creatorIndex != null) {
+                return new PropertyMember(constructor, typeParser.getConstructorParameterTypes(constructor).get(creatorIndex), constructor.getAnnotatedParameterTypes()[creatorIndex], annotationGetter);
+            }
+        }
+        TypeScriptGenerator.getLogger().verbose(String.format(
                 "Unexpected member '%s' in property '%s' in class '%s'",
                 propertyMember != null ? propertyMember.getClass().getName() : null,
                 propertyName,
                 sourceClass.getName()));
+        return null;
     }
 
     protected boolean isAnnotatedPropertyIncluded(Function<Class<? extends Annotation>, Annotation> getAnnotationFunction, String propertyDescription) {
@@ -167,6 +184,9 @@ public abstract class ModelParser {
             if (!settings.optionalAnnotations.isEmpty()) {
                 return Utils.hasAnyAnnotation(propertyMember::getAnnotation, settings.optionalAnnotations);
             }
+            if (settings.primitivePropertiesRequired && Utils.isPrimitiveType(propertyMember.getType())) {
+                return false;
+            }
             if (!settings.requiredAnnotations.isEmpty()) {
                 return !Utils.hasAnyAnnotation(propertyMember::getAnnotation, settings.requiredAnnotations);
             }
@@ -179,8 +199,9 @@ public abstract class ModelParser {
         if (sourceClass.type.isEnum()) {
             @SuppressWarnings("unchecked")
             final Class<? extends Enum<?>> enumClass = (Class<? extends Enum<?>>) sourceClass.type;
+            final Map<String, Field> fields = Stream.of(enumClass.getDeclaredFields()).collect(Utils.toMap(field -> field.getName(), field -> field));
             for (Enum<?> enumConstant : enumClass.getEnumConstants()) {
-                values.add(new EnumMemberModel(enumConstant.name(), enumConstant.name(), null));
+                values.add(new EnumMemberModel(enumConstant.name(), enumConstant.name(), fields.get(enumConstant.name()), null));
             }
         }
         return new EnumModel(sourceClass.type, EnumKind.StringBased, values, null);
